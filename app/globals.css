@@ -1,0 +1,114 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@import url("https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap");
+
+:root {
+  --rc: #8a8a92;
+}
+
+html, body {
+  background: #08080a;
+  color: #f1efe6;
+}
+
+body {
+  background:
+    radial-gradient(ellipse 900px 500px at 15% -10%, rgba(200,30,58,0.10), transparent 60%),
+    radial-gradient(ellipse 700px 500px at 100% 0%, rgba(60,60,80,0.12), transparent 55%),
+    #08080a;
+  min-height: 100vh;
+}
+
+::selection { background: #c81e3a; color: #fff; }
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-thumb { background: #26262e; border-radius: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+
+.font-display { font-family: 'Rajdhani', sans-serif; letter-spacing: 0.02em; }
+
+/* ---- Foil / rarity effects (applied via data-foil attribute on .card-shell) ---- */
+.card-shell { position: relative; overflow: hidden; }
+
+.card-shell[data-foil="sheen"]::after {
+  content: "";
+  position: absolute; inset: 0;
+  background: linear-gradient(115deg, transparent 40%, rgba(255,255,255,0.18) 50%, transparent 60%);
+  background-size: 250% 250%;
+  background-position: 120% 0;
+  transition: background-position .5s ease;
+  pointer-events: none; z-index: 2;
+}
+.card-shell[data-foil="sheen"]:hover::after { background-position: -20% 100%; }
+
+.card-shell[data-foil="holo"]::after {
+  content: "";
+  position: absolute; inset: 0;
+  background: linear-gradient(120deg, rgba(255,80,180,0.22), rgba(80,180,255,0.22), rgba(255,220,80,0.22), rgba(80,255,180,0.22));
+  background-size: 300% 300%;
+  mix-blend-mode: overlay;
+  animation: holoshift 5s linear infinite;
+  pointer-events: none; z-index: 2;
+}
+@keyframes holoshift { 0% { background-position: 0% 50%; } 100% { background-position: 200% 50%; } }
+
+.card-shell[data-foil="glitch"] { animation: glitchpulse 2.6s infinite; }
+@keyframes glitchpulse {
+  0%, 94%, 100% { filter: none; }
+  95% { filter: hue-rotate(30deg) brightness(1.15); }
+  96% { filter: hue-rotate(-20deg); transform: translateX(1px); }
+  97% { filter: none; }
+}
+.card-shell[data-foil="glitch"]::after {
+  content: "";
+  position: absolute; inset: 0;
+  background: repeating-linear-gradient(180deg, rgba(255,20,50,0.06) 0 2px, transparent 2px 4px);
+  pointer-events: none; z-index: 2;
+}
+
+.card-shell[data-foil="particle"] .card-art::before,
+.card-shell[data-foil="particle"] .card-art::after {
+  content: "";
+  position: absolute; width: 3px; height: 3px;
+  background: var(--rc); border-radius: 50%;
+  box-shadow: 0 0 6px 1px var(--rc);
+  animation: floatp 3.5s ease-in-out infinite;
+}
+.card-shell[data-foil="particle"] .card-art::before { left: 25%; top: 70%; animation-delay: 0s; }
+.card-shell[data-foil="particle"] .card-art::after { left: 65%; top: 30%; animation-delay: 1.4s; }
+@keyframes floatp { 0%, 100% { transform: translateY(0); opacity: .9; } 50% { transform: translateY(-70px); opacity: .15; } }
+
+.card-shell[data-foil="prism"] { animation: prismglow 2.2s ease-in-out infinite; }
+@keyframes prismglow {
+  0%, 100% { box-shadow: 0 0 0 1px var(--rc) inset, 0 0 26px -2px var(--rc); }
+  50% { box-shadow: 0 0 0 1px var(--rc) inset, 0 0 42px 4px var(--rc); }
+}
+.card-shell[data-foil="prism"]::after {
+  content: "";
+  position: absolute; inset: 0;
+  background: conic-gradient(from 0deg, rgba(255,255,255,0.25), transparent 30%, rgba(255,255,255,0.2) 60%, transparent 90%);
+  animation: spin 4s linear infinite;
+  mix-blend-mode: overlay;
+  pointer-events: none; z-index: 2;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.card-shell.locked { filter: grayscale(1) brightness(0.35); }
+
+.field-card.attacking-player { animation: attackmoveRight 1s ease forwards; }
+.field-card.attacking-enemy { animation: attackmoveLeft 1s ease forwards; }
+@keyframes attackmoveRight {
+  0% { transform: translateX(0); }
+  35% { transform: translateX(120px) scale(1.06); }
+  55% { transform: translateX(120px) scale(1.12); }
+  70% { transform: translateX(120px) scale(0.96); }
+  100% { transform: translateX(0); }
+}
+@keyframes attackmoveLeft {
+  0% { transform: translateX(0); }
+  35% { transform: translateX(-120px) scale(1.06); }
+  55% { transform: translateX(-120px) scale(1.12); }
+  70% { transform: translateX(-120px) scale(0.96); }
+  100% { transform: translateX(0); }
+}
