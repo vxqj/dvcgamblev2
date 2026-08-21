@@ -2,8 +2,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { ref, onValue, runTransaction } from "firebase/database";
-import { db, isFirebaseConfigured } from "@/lib/firebase";
+import { supabase, isSupabaseConfigured } from "@/lib/supabase";
 import { NUGGET_NAMES } from "@/nugget.config";
 
 const slugify = (s) =>
@@ -32,39 +31,74 @@ export default function Ballot() {
     }
   }, []);
 
-  // Subscribe to the global, shared vote counts
+  // Load current counts, then subscribe to live changes from every visitor
   useEffect(() => {
-    if (!isFirebaseConfigured) {
+    if (!isSupabaseConfigured) {
       setLoaded(true);
       return;
     }
-    const votesRef = ref(db, "votes");
-    const unsubscribe = onValue(
-      votesRef,
-      (snapshot) => {
-        setVotes(snapshot.val() || {});
-        setLoaded(true);
-      },
-      (error) => {
+
+    let active = true;
+
+    async function loadInitial() {
+      const { data, error } = await supabase.from("votes").select("slug, count");
+      if (error) {
         console.error("Nugget List: failed to read votes", error);
-        setLoaded(true);
+      } else if (active && data) {
+        const next = {};
+        data.forEach((row) => {
+          next[row.slug] = row.count;
+        });
+        setVotes(next);
       }
-    );
-    return () => unsubscribe();
+      if (active) setLoaded(true);
+    }
+    loadInitial();
+
+    const channel = supabase
+      .channel("votes-realtime")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "votes" },
+        (payload) => {
+          const row = payload.new;
+          if (!row) return;
+          setVotes((prev) => ({ ...prev, [row.slug]: row.count }));
+        }
+      )
+      .subscribe();
+
+    return () => {
+      active = false;
+      supabase.removeChannel(channel);
+    };
   }, []);
 
   const castVote = useCallback(
     (slug) => {
-      if (!isFirebaseConfigured || !loaded || myVote === slug) return;
+      if (!isSupabaseConfigured || !loaded || myVote === slug) return;
       const prevVote = myVote;
+      const candidate = CANDIDATES.find((c) => c.slug === slug);
 
-      runTransaction(ref(db, `votes/${slug}`), (current) => (current || 0) + 1).catch(
-        (e) => console.error("Nugget List: vote failed to save", e)
-      );
+      // optimistic local update — realtime event will confirm/correct it
+      setVotes((prev) => ({ ...prev, [slug]: (prev[slug] || 0) + 1 }));
       if (prevVote) {
-        runTransaction(ref(db, `votes/${prevVote}`), (current) =>
-          Math.max(0, (current || 0) - 1)
-        ).catch((e) => console.error("Nugget List: vote switch failed to save", e));
+        setVotes((prev) => ({
+          ...prev,
+          [prevVote]: Math.max(0, (prev[prevVote] || 0) - 1),
+        }));
+      }
+
+      supabase
+        .rpc("increment_vote", { vote_slug: slug, vote_name: candidate.name })
+        .then(({ error }) => {
+          if (error) console.error("Nugget List: vote failed to save", error);
+        });
+
+      if (prevVote) {
+        supabase.rpc("decrement_vote", { vote_slug: prevVote }).then(({ error }) => {
+          if (error) console.error("Nugget List: vote switch failed to save", error);
+        });
       }
 
       setMyVote(slug);
@@ -80,14 +114,14 @@ export default function Ballot() {
     [loaded, myVote]
   );
 
-  if (!isFirebaseConfigured) {
+  if (!isSupabaseConfigured) {
     return (
       <div className="setup-banner">
-        <b>&#9888; Firebase not configured yet</b>
-        Add your Firebase Realtime Database credentials to{" "}
-        <code>.env.local</code> (copy from <code>.env.local.example</code>) so
-        votes sync globally across every visitor. See the README for the
-        3-minute setup.
+        <b>&#9888; Supabase not configured yet</b>
+        Add your Supabase project URL and anon key to <code>.env.local</code>{" "}
+        (copy from <code>.env.local.example</code>), and run{" "}
+        <code>supabase-setup.sql</code> in your project's SQL editor so votes
+        sync globally. See the README for the full setup.
       </div>
     );
   }
