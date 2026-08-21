@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { supabase, isSupabaseConfigured } from "@/lib/supabase";
 import { NUGGET_NAMES } from "@/nugget.config";
@@ -14,12 +14,15 @@ const slugify = (s) =>
 
 const CANDIDATES = NUGGET_NAMES.map((name) => ({ name, slug: slugify(name) }));
 const MY_VOTE_KEY = "nugget-list-my-vote";
+const POLL_INTERVAL_MS = 4000;
 
 export default function Ballot() {
   const [votes, setVotes] = useState({});
   const [myVote, setMyVote] = useState(null);
   const [loaded, setLoaded] = useState(false);
   const [burstSlug, setBurstSlug] = useState(null);
+  const [voteError, setVoteError] = useState(null);
+  const votingRef = useRef(false);
 
   // Restore this browser's own vote (stored locally, not global)
   useEffect(() => {
@@ -31,7 +34,28 @@ export default function Ballot() {
     }
   }, []);
 
-  // Load current counts, then subscribe to live changes from every visitor
+  const applyRows = useCallback((rows) => {
+    const next = {};
+    rows.forEach((row) => {
+      next[row.slug] = row.count;
+    });
+    setVotes(next);
+  }, []);
+
+  const fetchVotes = useCallback(async () => {
+    const { data, error } = await supabase.from("votes").select("slug, count");
+    if (error) {
+      console.error("Nugget List: failed to read votes", error);
+      return false;
+    }
+    if (data) applyRows(data);
+    return true;
+  }, [applyRows]);
+
+  // Load current counts, subscribe to realtime pushes, AND poll as a fallback.
+  // Polling means the board still converges for everyone even if realtime
+  // is misconfigured (e.g. the table isn't in the supabase_realtime
+  // publication) — it just updates every few seconds instead of instantly.
   useEffect(() => {
     if (!isSupabaseConfigured) {
       setLoaded(true);
@@ -40,20 +64,10 @@ export default function Ballot() {
 
     let active = true;
 
-    async function loadInitial() {
-      const { data, error } = await supabase.from("votes").select("slug, count");
-      if (error) {
-        console.error("Nugget List: failed to read votes", error);
-      } else if (active && data) {
-        const next = {};
-        data.forEach((row) => {
-          next[row.slug] = row.count;
-        });
-        setVotes(next);
-      }
+    (async () => {
+      await fetchVotes();
       if (active) setLoaded(true);
-    }
-    loadInitial();
+    })();
 
     const channel = supabase
       .channel("votes-realtime")
@@ -68,50 +82,89 @@ export default function Ballot() {
       )
       .subscribe();
 
+    const pollId = window.setInterval(() => {
+      if (active) fetchVotes();
+    }, POLL_INTERVAL_MS);
+
+    // Refetch immediately whenever the tab regains focus, so switching
+    // back to the page always shows the latest state without waiting
+    // for the next poll tick.
+    const onFocus = () => active && fetchVotes();
+    window.addEventListener("focus", onFocus);
+
     return () => {
       active = false;
       supabase.removeChannel(channel);
+      window.clearInterval(pollId);
+      window.removeEventListener("focus", onFocus);
     };
-  }, []);
+  }, [fetchVotes]);
 
   const castVote = useCallback(
-    (slug) => {
-      if (!isSupabaseConfigured || !loaded || myVote === slug) return;
+    async (slug) => {
+      if (!isSupabaseConfigured || !loaded || myVote === slug || votingRef.current)
+        return;
+      votingRef.current = true;
+      setVoteError(null);
+
       const prevVote = myVote;
+      const prevVotesSnapshot = votes;
       const candidate = CANDIDATES.find((c) => c.slug === slug);
 
-      // optimistic local update — realtime event will confirm/correct it
-      setVotes((prev) => ({ ...prev, [slug]: (prev[slug] || 0) + 1 }));
-      if (prevVote) {
-        setVotes((prev) => ({
-          ...prev,
-          [prevVote]: Math.max(0, (prev[prevVote] || 0) - 1),
-        }));
-      }
-
-      supabase
-        .rpc("increment_vote", { vote_slug: slug, vote_name: candidate.name })
-        .then(({ error }) => {
-          if (error) console.error("Nugget List: vote failed to save", error);
-        });
-
-      if (prevVote) {
-        supabase.rpc("decrement_vote", { vote_slug: prevVote }).then(({ error }) => {
-          if (error) console.error("Nugget List: vote switch failed to save", error);
-        });
-      }
-
+      // optimistic local update — corrected/confirmed by realtime + polling
+      setVotes((prev) => {
+        const next = { ...prev, [slug]: (prev[slug] || 0) + 1 };
+        if (prevVote) next[prevVote] = Math.max(0, (prev[prevVote] || 0) - 1);
+        return next;
+      });
       setMyVote(slug);
+
+      const incResult = await supabase.rpc("increment_vote", {
+        vote_slug: slug,
+        vote_name: candidate.name,
+      });
+
+      let decResult = { error: null };
+      if (!incResult.error && prevVote) {
+        decResult = await supabase.rpc("decrement_vote", { vote_slug: prevVote });
+      }
+
+      if (incResult.error || decResult.error) {
+        const err = incResult.error || decResult.error;
+        console.error("Nugget List: vote failed to save", err);
+
+        // Roll back — the optimistic update never actually landed, so don't
+        // leave the UI (or localStorage) claiming a vote that isn't real.
+        setVotes(prevVotesSnapshot);
+        setMyVote(prevVote);
+        try {
+          if (prevVote) window.localStorage.setItem(MY_VOTE_KEY, prevVote);
+          else window.localStorage.removeItem(MY_VOTE_KEY);
+        } catch (e) {
+          // ignore
+        }
+
+        setVoteError(
+          "Your vote didn't save — check your connection and try again."
+        );
+        votingRef.current = false;
+        return;
+      }
+
       try {
         window.localStorage.setItem(MY_VOTE_KEY, slug);
       } catch (e) {
         // ignore — vote still counted globally, just won't be remembered locally
       }
 
+      // Confirm against the server rather than trusting the optimistic state
+      await fetchVotes();
+
       setBurstSlug(slug);
       window.setTimeout(() => setBurstSlug(null), 600);
+      votingRef.current = false;
     },
-    [loaded, myVote]
+    [loaded, myVote, votes, fetchVotes]
   );
 
   if (!isSupabaseConfigured) {
@@ -159,6 +212,7 @@ export default function Ballot() {
             </>
           )}
         </div>
+        {voteError && <div className="vote-error">{voteError}</div>}
       </header>
 
       <div className="ballot">

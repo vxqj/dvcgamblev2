@@ -95,6 +95,14 @@ h1 {
   color: #fff;
 }
 
+.vote-error {
+  font-family: var(--font-mono), monospace;
+  font-size: 12px;
+  color: #ff8a8a;
+  margin-top: 10px;
+  letter-spacing: 0.02em;
+}
+
 /* ---------------- Ballot card ---------------- */
 .ballot {
   background: var(--paper);
